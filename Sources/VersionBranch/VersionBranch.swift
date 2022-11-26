@@ -28,16 +28,15 @@ import ArgumentParser
 import Foundation
 
 enum Git {
-    static let isGitRepo = "git rev-parse --is-inside-work-tree --quiet"
+    static let isGitRepo = "git rev-parse --is-inside-work-tree"
 
     // Will print hash if it exists, otherwise nothing
     static let doesMainExist = "git rev-parse --verify --quiet main"
-    static let checkoutMain = "git checkout main"
     static let main = "main"
 
-    static let lastestTag = "git describe --tags --abbrev=0"
-
     static let currentBranch = "git rev-parse --abbrev-ref HEAD"
+
+    static let lastestTag = "git describe --tags --abbrev=0 --always"
 
     static let localBranchHash = "git rev-parse @"
     static let remoteBranchHash = "git rev-parse @{u}"
@@ -46,6 +45,16 @@ enum Git {
     static let mergeBaseHash = "git merge-base @ @{u}"
 
     static let pull = "git pull"
+
+    static func checkout(_ branch: String) -> String {
+        "git checkout \(branch)"
+    }
+}
+
+extension String {
+    func matches<T>(regex: T) -> Bool where T: StringProtocol {
+        range(of: regex, options: .regularExpression) != nil
+    }
 }
 
 // https://betterprogramming.pub/creating-a-swifty-command-line-tool-with-argumentparser-a6240b512b0b
@@ -91,20 +100,13 @@ struct VersionBranch: ParsableCommand {
     func validate() throws {
         var errors = [String]()
 
-        if try shell(Git.isGitRepo) == "true" {
+        if try shell(Git.isGitRepo).matches(regex: #"(true)"#) {
             if try !shell(Git.doesMainExist).isEmpty {
-
                 // Move tag check to different function. It can provide the version components, 0.0.0 if no previous tags exist, or throws if the format is incorrect
                 let latestTag = try shell(Git.lastestTag)
-
-                if !latestTag.isEmpty {
-
-                    if #available(macOS 13.0, *) {
-                        if latestTag.matches(of: #/\d+\.\d+\.\d+/#).isEmpty {
-                            errors.append("Tags must be in the format X.X.X, examples: 1.0.1, 2.3.0, 0.0.1")
-                        }
-                    } else {
-                        errors.append("\(Self.scriptName) requires Mac 13.0+.")
+                if !latestTag.matches(regex: #".*\d+\.\d+\.\d+.*"#) {
+                    if !promptToProceed("No version tag found in the format \"X.X.X\". This will create a new tag in that format, proceed?") {
+                        throw ExitCode.validationFailure
                     }
                 }
             } else {
@@ -141,13 +143,24 @@ struct VersionBranch: ParsableCommand {
     }
 
     mutating func run() throws {
-
-
         // TODO: Check if on main, if not, prompt to checkout main
         // TODO: Check if needs pull, if so, prompt to pull
         // if I need user input
         // let _ = readLine()
         throw ExitCode.success
+    }
+
+    func promptToProceed(_ prompt: String) -> Bool {
+        print("\(prompt) Type yes (y) or no (n): ")
+
+        let yesOrNo = readLine()
+
+        if yesOrNo?.matches(regex: #"(?i)(yes|y|no|n)(?-i)"#) != true {
+            print("You must type yes or no to proceed.")
+            return promptToProceed(prompt)
+        }
+
+        return yesOrNo!.matches(regex: #"(yes|y)"#)
     }
 
     // From https://betterprogramming.pub/command-line-tool-with-argument-parser-in-swift-b0e1c27aebd
