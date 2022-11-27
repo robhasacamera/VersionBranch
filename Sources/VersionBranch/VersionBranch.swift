@@ -49,6 +49,10 @@ enum Git {
     static func checkout(_ branch: String) -> String {
         "git checkout \(branch)"
     }
+
+    static func branch(_ branch: String) -> String {
+        "git branch \(branch)"
+    }
 }
 
 extension String {
@@ -86,36 +90,53 @@ struct VersionBranch: ParsableCommand {
     @Flag(name: .shortAndLong, help: "Increments version number to the next fix version: 1.0.0 would become 1.0.1")
     var fix = false
 
+    @Flag(name: .shortAndLong, help: "Will skip all prompts and assume you'd like to proceed.")
+    var skipPrompts = false
+
     // TODO: Will need to verify string is in correct format, verify path exists, then run the comment in that directly (probably some bash arument
     @Argument(help: "The path to the git repo.")
     var gitPath: String?
 
-    // TODO: Add option to provide the filepath to repo
-    // TODO: Provide an option to automatically checkout main and do a pull
+    @Flag(name: .shortAndLong, help: "Used to diagnose issues with the running script")
+    var verbose = false
 
-    // TODO: Collect error messages, provide them all if multiple.
-    // TODO: Check if only one version (major, minor, fix) was given
-    // TODO: Check if git repo
-    // TODO: Check if latest tag matches regex
+    // Validate file path
     func validate() throws {
+        verbosePrint("Starting command validation.")
         var errors = [String]()
 
-        if try shell(Git.isGitRepo).matches(regex: #"(true)"#) {
-            if try !shell(Git.doesMainExist).isEmpty {
-                // Move tag check to different function. It can provide the version components, 0.0.0 if no previous tags exist, or throws if the format is incorrect
-                let latestTag = try shell(Git.lastestTag)
-                if !latestTag.matches(regex: #".*\d+\.\d+\.\d+.*"#) {
-                    if !promptToProceed("No version tag found in the format \"X.X.X\". This will create a new tag in that format, proceed?") {
-                        throw ExitCode.validationFailure
-                    }
+        verbosePrint("Checking for git-path.")
+        if let gitPath {
+            verbosePrint("git-path found: \(gitPath)")
+            var isDirectory = ObjCBool(false)
+
+            if FileManager.default.fileExists(atPath: gitPath, isDirectory: &isDirectory) {
+                if isDirectory.boolValue {
+                    verbosePrint("Successfully validated git-path.")
+                    try shell("cd \(gitPath)")
+                } else {
+                    errors.append("Path is not a directory: \(gitPath)")
                 }
             } else {
-                errors.append("The main branch does not exist. \(Self.scriptName) requires a main branch to exist")
+                errors.append("Directory does not exist: \(gitPath)")
             }
         } else {
-            errors.append("This is not a git repo. \(Self.scriptName) must be run within a git repo.")
+            verbosePrint("No git-path provided.")
         }
 
+        verbosePrint("Checking that path contains git repo.")
+        // We only want to check for the git repo if there isn't already a gitPath error
+        if errors.isEmpty {
+            if try shell(Git.isGitRepo).matches(regex: #"(true)"#) {
+                verbosePrint("Successfully validated git repo.")
+            } else {
+                errors.append("This is not a git repo. \(Self.scriptName) must be run within a git repo.")
+            }
+        }  else {
+            verbosePrint("Skipping git repo validation due to git-path error.")
+        }
+
+        verbosePrint("Checking version component flag.")
         let versionFlags = [major, minor, fix]
 
         var trueCount = 0
@@ -130,31 +151,116 @@ struct VersionBranch: ParsableCommand {
             errors.append("A version flag must be provided, use -m (--major), -n (--minor), or -f (--fix).")
         } else if trueCount > 1 {
             errors.append("Too many version flags provided. Please provide only one version flag, -m (--major), -n (--minor), or -f (--fix).")
+        } else {
+            verbosePrint("Successfully validated version component flag.")
         }
 
+        verbosePrint("Checking for validation errors.")
+
         guard errors.isEmpty else {
+            verbosePrint("Found \(errors.count) validation errors.")
             for error in errors {
                 print(error)
             }
             throw ExitCode.validationFailure
         }
 
-        throw ExitCode.success
+        verbosePrint("No validation errors found.")
     }
 
     mutating func run() throws {
-        // TODO: Check if on main, if not, prompt to checkout main
+        verbosePrint("Starting command run.")
+
+        verbosePrint("Checking the current branch.")
+        let currentBranch = try shell(Git.currentBranch)
+
+        // TODO: Add a shortcut for trimming whitespace in a utils package
+        if currentBranch.trimmingCharacters(in: .whitespacesAndNewlines) != Git.main {
+            if promptToProceed("You are currently on the branch, \"\(currentBranch)\". Would you like to checkout the \"main\" branch") {
+                if try !shell(Git.doesMainExist).isEmpty {
+                    print(try shell(Git.checkout(Git.main)))
+                } else {
+                    print("The main branch does not exist.")
+                    throw ExitCode.failure
+                }
+            }
+        }
+        verbosePrint("Finished checking the current branch.")
+
         // TODO: Check if needs pull, if so, prompt to pull
+
+        verbosePrint("Retrieving version tag.")
+        let tag = try getVersionTag()
+        verbosePrint("Current version tag is \"\(tag.string)\"")
+
+        verbosePrint("Getting next version tag")
+        let nextTag: VersionTag
+
+        if major {
+            nextTag = tag.nextMajor
+        } else if minor {
+            nextTag = tag.nextMinor
+        } else {
+            nextTag = tag.nextFix
+        }
+
+        verbosePrint("Next version tag is\"\(nextTag.string)\".")
+
+        verbosePrint("Creating branch for \"\(nextTag.string)\".")
+
+        // TODO: Create branch for tag
+
+        verbosePrint("Finished creating branch for \"\(nextTag.string)\".")
+
+        verbosePrint("Checking out \"\(nextTag.string)\" branch.")
+
+        // TODO: Create branch for tag
+
+        verbosePrint("Finished checking out \"\(nextTag.string)\" branch.")
+
         // if I need user input
         // let _ = readLine()
         throw ExitCode.success
     }
 
-    func promptToProceed(_ prompt: String) -> Bool {
-        print("\(prompt) Type yes (y) or no (n): ")
+    func getVersionTag() throws -> VersionTag {
+        let latestTag = try shell(Git.lastestTag)
+        if !latestTag.matches(regex: #"\d+\.\d+\.\d+"#) {
+            if promptToProceed("No version tag found in the format \"X.X.X\". A new tag will be created in that format, proceed?") {
+                return VersionTag(major: 0, minor: 0, fix: 0)
+            } else {
+                throw ExitCode.success
+            }
+        }
+
+        let tagComponents = latestTag.split(separator: ".")
+
+        guard tagComponents.count == 3 else {
+            print("Version tags must be in the format \"X.X.X\" with 3 components. Found \(tagComponents.count) instead.")
+            throw ExitCode.failure
+        }
+
+        guard let major = Int(tagComponents[0]),
+              let minor = Int(tagComponents[1]),
+              let fix = Int(tagComponents[2])
+        else {
+            print("Tag components, must all be numbers. Latest tag is \(latestTag) ")
+            throw ExitCode.failure
+        }
+
+        return VersionTag(major: major, minor: minor, fix: fix)
+    }
+
+    func promptToProceed(_ prompt: String, defaultValue: Bool = true) -> Bool {
+        guard !skipPrompts else {
+            return defaultValue
+        }
+
+        print("\(prompt) Type yes (y) or no (n):", terminator: " ")
 
         let yesOrNo = readLine()
 
+        // Case insensitive match
         if yesOrNo?.matches(regex: #"(?i)(yes|y|no|n)(?-i)"#) != true {
             print("You must type yes or no to proceed.")
             return promptToProceed(prompt)
@@ -164,6 +270,7 @@ struct VersionBranch: ParsableCommand {
     }
 
     // From https://betterprogramming.pub/command-line-tool-with-argument-parser-in-swift-b0e1c27aebd
+    @discardableResult
     func shell(_ command: String) throws -> String {
         let task = Process()
         task.launchPath = "/bin/bash"
@@ -183,5 +290,35 @@ struct VersionBranch: ParsableCommand {
         }
 
         return output
+    }
+
+    func verbosePrint(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+        guard verbose else {
+            return
+        }
+
+        print(items, separator: separator, terminator: terminator)
+    }
+}
+
+struct VersionTag {
+    let major: Int
+    let minor: Int
+    let fix: Int
+
+    var nextMajor: VersionTag {
+        VersionTag(major: major + 1, minor: minor, fix: fix)
+    }
+
+    var nextMinor: VersionTag {
+        VersionTag(major: major, minor: minor + 1, fix: fix)
+    }
+
+    var nextFix: VersionTag {
+        VersionTag(major: major, minor: minor, fix: fix + 1)
+    }
+
+    var string: String {
+        "\(major).\(minor).\(fix)"
     }
 }
