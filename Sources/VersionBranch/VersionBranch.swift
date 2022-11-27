@@ -44,6 +44,9 @@ enum Git {
     // https://stackoverflow.com/questions/3258243/check-if-pull-needed-in-git
     static let mergeBaseHash = "git merge-base @ @{u}"
 
+    static let remoteUpdate = "git remote update"
+    static let remoteBranch = "git branch -r"
+
     static let pull = "git pull"
 
     static func checkout(_ branch: String) -> String {
@@ -67,6 +70,7 @@ extension String {
 // - Getting standard input
 struct VersionBranch: ParsableCommand {
     static let scriptName = "versionbranch"
+    static let fatalRegex = #"fatal"#
 
     static let configuration = CommandConfiguration(
         commandName: "versionbranch",
@@ -172,10 +176,10 @@ struct VersionBranch: ParsableCommand {
         verbosePrint("Starting command run.")
 
         verbosePrint("Checking the current branch.")
-        let currentBranch = try shell(Git.currentBranch)
+        let currentBranch = try shell(Git.currentBranch).trimmingCharacters(in: .whitespacesAndNewlines)
 
         // TODO: Add a shortcut for trimming whitespace in a utils package
-        if currentBranch.trimmingCharacters(in: .whitespacesAndNewlines) != Git.main {
+        if currentBranch != Git.main {
             if promptToProceed("You are currently on the branch, \"\(currentBranch)\". Would you like to checkout the \"main\" branch") {
                 if try !shell(Git.doesMainExist).isEmpty {
                     print(try shell(Git.checkout(Git.main)))
@@ -187,7 +191,37 @@ struct VersionBranch: ParsableCommand {
         }
         verbosePrint("Finished checking the current branch.")
 
-        // TODO: Check if needs pull, if so, prompt to pull
+        verbosePrint("Checking for remote branch")
+        let remoteBranch = try shell(Git.remoteBranch).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // TODO: check if remote exists, if not skip pull
+        if !remoteBranch.isEmpty {
+            verbosePrint("Found remote \"\(remoteBranch)\".")
+            verbosePrint("Updating remote refs.")
+            if try !shell(Git.remoteUpdate).matches(regex: Self.fatalRegex) {
+                verbosePrint("Successfully updated remote refs.")
+                let localBranchHash = try shell(Git.localBranchHash)
+                let remoteBranchHash = try shell(Git.remoteBranchHash)
+                let mergeBaseHash = try shell(Git.mergeBaseHash)
+
+                // If local hash is behind the remote, it'll be the merge base
+                if localBranchHash != remoteBranchHash
+                    && localBranchHash == mergeBaseHash
+                && promptToProceed("Local branch is out of date with remote, do a pull?"){
+                    verbosePrint("Pulling remote for updates.")
+                    if try shell(Git.pull).contains(Self.fatalRegex) {
+                        print("Exiting: Unable to pull from remote \"\(remoteBranch)\".")
+                    } else {
+                        verbosePrint("Successfully pulled for updates.")
+                    }
+                }
+            } else if !promptToProceed("Unable to connect to remote, do you want to proceed?", defaultValue: false) {
+                print("Exiting: Failed to update remote refs for \"\(remoteBranch)\".")
+                throw ExitCode.failure
+            }
+        } else {
+            verbosePrint("No remote branch exists for\(currentBranch).")
+        }
 
         verbosePrint("Retrieving version tag.")
         let tag = try getVersionTag()
@@ -209,17 +243,24 @@ struct VersionBranch: ParsableCommand {
         verbosePrint("Creating branch for \"\(nextTag.string)\".")
 
         // TODO: Create branch for tag
+        if try !shell(Git.branch(nextTag.string)).matches(regex: Self.fatalRegex) {
+            verbosePrint("Successfully created \"\(nextTag.string)\" branch.")
+        } else {
+            print("Exiting: Failed to create \"\(nextTag.string)\"")
+        }
 
         verbosePrint("Finished creating branch for \"\(nextTag.string)\".")
 
         verbosePrint("Checking out \"\(nextTag.string)\" branch.")
 
-        // TODO: Create branch for tag
+        if try !shell(Git.checkout(nextTag.string)).matches(regex: Self.fatalRegex) {
+            verbosePrint("Successfully checked out \"\(nextTag.string)\" branch")
+        } else {
+            print("Exiting: Failed to create \"\(nextTag.string)\".")
+        }
 
         verbosePrint("Finished checking out \"\(nextTag.string)\" branch.")
 
-        // if I need user input
-        // let _ = readLine()
         throw ExitCode.success
     }
 
