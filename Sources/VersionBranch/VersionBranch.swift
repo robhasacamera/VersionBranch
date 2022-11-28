@@ -64,10 +64,7 @@ extension String {
     }
 }
 
-// https://betterprogramming.pub/creating-a-swifty-command-line-tool-with-argumentparser-a6240b512b0b
-// - Beginning tutorial
-// https://rderik.com/blog/understanding-the-swift-argument-parser-and-working-with-stdin/
-// - Getting standard input
+// Beginning tutorial: https://betterprogramming.pub/creating-a-swifty-command-line-tool-with-argumentparser-a6240b512b0b
 struct VersionBranch: ParsableCommand {
     static let scriptName = "versionbranch"
     static let fatalRegex = #"fatal"#
@@ -97,7 +94,6 @@ struct VersionBranch: ParsableCommand {
     @Flag(name: .shortAndLong, help: "Will skip all prompts and assume you'd like to proceed.")
     var skipPrompts = false
 
-    // TODO: Will need to verify string is in correct format, verify path exists, then run the comment in that directly (probably some bash arument
     @Argument(help: "The path to the git repo.")
     var gitPath: String?
 
@@ -113,17 +109,17 @@ struct VersionBranch: ParsableCommand {
             }
         }
 
-        verbosePrint("Starting validation.")
+        printWhenVerbose("Starting validation.")
         var errors = [String]()
 
-        verbosePrint("Checking for git-path.")
+        printWhenVerbose("Checking for git-path.")
         if let gitPath {
-            verbosePrint("git-path found: \(gitPath)")
+            printWhenVerbose("git-path found: \(gitPath)")
             var isDirectory = ObjCBool(false)
 
             if FileManager.default.fileExists(atPath: gitPath, isDirectory: &isDirectory) {
                 if isDirectory.boolValue {
-                    verbosePrint("Successfully validated git-path.")
+                    printWhenVerbose("Successfully validated git-path.")
                 } else {
                     errors.append("Path is not a directory: \(gitPath)")
                 }
@@ -131,22 +127,22 @@ struct VersionBranch: ParsableCommand {
                 errors.append("Directory does not exist: \(gitPath)")
             }
         } else {
-            verbosePrint("No git-path provided.")
+            printWhenVerbose("No git-path provided.")
         }
 
-        verbosePrint("Checking that path contains git repo.")
+        printWhenVerbose("Checking that path contains git repo.")
         // We only want to check for the git repo if there isn't already a gitPath error
         if errors.isEmpty {
             if try shell(Git.isGitRepo).matches(regex: #"(true)"#) {
-                verbosePrint("Successfully validated git repo.")
+                printWhenVerbose("Successfully validated git repo.")
             } else {
                 errors.append("This is not a git repo. \(Self.scriptName) must be run within a git repo.")
             }
         } else {
-            verbosePrint("Skipping git repo validation due to git-path error.")
+            printWhenVerbose("Skipping git repo validation due to git-path error.")
         }
 
-        verbosePrint("Checking version component flag.")
+        printWhenVerbose("Checking version component flag.")
         let versionFlags = [major, minor, fix]
 
         var trueCount = 0
@@ -162,13 +158,13 @@ struct VersionBranch: ParsableCommand {
         } else if trueCount > 1 {
             errors.append("Too many version flags provided. Please provide only one version flag, -m (--major), -n (--minor), or -f (--fix).")
         } else {
-            verbosePrint("Successfully validated version component flag.")
+            printWhenVerbose("Successfully validated version component flag.")
         }
 
-        verbosePrint("Checking for validation errors.")
+        printWhenVerbose("Checking for validation errors.")
 
         guard errors.isEmpty else {
-            verbosePrint("Found \(errors.count) validation errors.")
+            printWhenVerbose("Found \(errors.count) validation errors.")
             for error in errors {
                 print(error)
             }
@@ -176,7 +172,7 @@ struct VersionBranch: ParsableCommand {
         }
 
         validatedSuccessfully = true
-        verbosePrint("No validation errors found.")
+        printWhenVerbose("No validation errors found.")
     }
 
     mutating func run() throws {
@@ -186,9 +182,9 @@ struct VersionBranch: ParsableCommand {
             }
         }
 
-        verbosePrint("Starting command run in \"\(try shell("pwd"))\".")
+        printWhenVerbose("Starting command run in \"\(try shell("pwd"))\".")
 
-        verbosePrint("Checking the current branch.")
+        printWhenVerbose("Checking the current branch.")
         let currentBranch = try shell(Git.currentBranch)
 
         // TODO: Add a shortcut for trimming whitespace in a utils package
@@ -202,17 +198,17 @@ struct VersionBranch: ParsableCommand {
                 }
             }
         }
-        verbosePrint("Finished checking the current branch.")
+        printWhenVerbose("Finished checking the current branch.")
 
-        verbosePrint("Checking for remote branch")
+        printWhenVerbose("Checking for remote branch")
         let remoteBranch = try shell(Git.remoteBranch)
 
         // TODO: check if remote exists, if not skip pull
         if !remoteBranch.isEmpty {
-            verbosePrint("Found remote \"\(remoteBranch)\".")
-            verbosePrint("Updating remote refs.")
+            printWhenVerbose("Found remote \"\(remoteBranch)\".")
+            printWhenVerbose("Updating remote refs.")
             if try !shell(Git.remoteUpdate).matches(regex: Self.fatalRegex) {
-                verbosePrint("Successfully updated remote refs.")
+                printWhenVerbose("Successfully updated remote refs.")
                 let localBranchHash = try shell(Git.localBranchHash)
                 let remoteBranchHash = try shell(Git.remoteBranchHash)
                 let mergeBaseHash = try shell(Git.mergeBaseHash)
@@ -222,11 +218,11 @@ struct VersionBranch: ParsableCommand {
                    localBranchHash == mergeBaseHash,
                    promptToProceed("Local branch is out of date with remote, do a pull?")
                 {
-                    verbosePrint("Pulling remote for updates.")
+                    printWhenVerbose("Pulling remote for updates.")
                     if try shell(Git.pull).contains(Self.fatalRegex) {
                         print("Exiting: Unable to pull from remote \"\(remoteBranch)\".")
                     } else {
-                        verbosePrint("Successfully pulled for updates.")
+                        printWhenVerbose("Successfully pulled for updates.")
                     }
                 }
             } else if !promptToProceed("Unable to connect to remote, do you want to proceed?", defaultValue: false) {
@@ -234,14 +230,14 @@ struct VersionBranch: ParsableCommand {
                 throw ExitCode.failure
             }
         } else {
-            verbosePrint("No remote branch exists for\(currentBranch).")
+            printWhenVerbose("No remote branch exists for\(currentBranch).")
         }
 
-        verbosePrint("Retrieving version tag.")
+        printWhenVerbose("Retrieving version tag.")
         let tag = try getVersionTag()
-        verbosePrint("Current version tag is \"\(tag.string)\"")
+        printWhenVerbose("Current version tag is \"\(tag.string)\"")
 
-        verbosePrint("Getting next version tag")
+        printWhenVerbose("Getting next version tag")
         let nextTag: VersionTag
 
         if major {
@@ -252,28 +248,28 @@ struct VersionBranch: ParsableCommand {
             nextTag = tag.nextFix
         }
 
-        verbosePrint("Next version tag is\"\(nextTag.string)\".")
+        printWhenVerbose("Next version tag is\"\(nextTag.string)\".")
 
-        verbosePrint("Creating branch for \"\(nextTag.string)\".")
+        printWhenVerbose("Creating branch for \"\(nextTag.string)\".")
 
         // TODO: Create branch for tag
         if try !shell(Git.branch(nextTag.string)).matches(regex: Self.fatalRegex) {
-            verbosePrint("Successfully created \"\(nextTag.string)\" branch.")
+            printWhenVerbose("Successfully created \"\(nextTag.string)\" branch.")
         } else {
             print("Exiting: Failed to create \"\(nextTag.string)\"")
         }
 
-        verbosePrint("Finished creating branch for \"\(nextTag.string)\".")
+        printWhenVerbose("Finished creating branch for \"\(nextTag.string)\".")
 
-        verbosePrint("Checking out \"\(nextTag.string)\" branch.")
+        printWhenVerbose("Checking out \"\(nextTag.string)\" branch.")
 
         if try !shell(Git.checkout(nextTag.string)).matches(regex: Self.fatalRegex) {
-            verbosePrint("Successfully checked out \"\(nextTag.string)\" branch")
+            printWhenVerbose("Successfully checked out \"\(nextTag.string)\" branch")
         } else {
             print("Exiting: Failed to create \"\(nextTag.string)\".")
         }
 
-        verbosePrint("Finished checking out \"\(nextTag.string)\" branch.")
+        printWhenVerbose("Finished checking out \"\(nextTag.string)\" branch.")
 
         throw ExitCode.success
     }
@@ -285,10 +281,10 @@ struct VersionBranch: ParsableCommand {
     }
 
     func getVersionTag() throws -> VersionTag {
-        verbosePrint("Getting latest version tag.")
+        printWhenVerbose("Getting latest version tag.")
         let latestTag = try shell(Git.lastestTag)
 
-        verbosePrint("Validating potential version tag \"\(latestTag)\".")
+        printWhenVerbose("Validating potential version tag \"\(latestTag)\".")
 
         let versionTagRegex = #"\d+\.\d+\.\d+"#
 
@@ -296,14 +292,14 @@ struct VersionBranch: ParsableCommand {
             if promptToProceed("No version tag found in the format \"X.X.X\". A new tag will be created in that format, proceed?") {
                 let defaultTag = VersionTag(major: 0, minor: 0, fix: 0)
 
-                verbosePrint("Proving default version tag \"\(defaultTag)\"")
+                printWhenVerbose("Proving default version tag \"\(defaultTag)\"")
                 return defaultTag
             } else {
                 print("Exiting: User refused to create tag.")
                 throw ExitCode.success
             }
         } else {
-            verbosePrint("Version tag \"\(latestTag)\" matches regex \"\(versionTagRegex)\".")
+            printWhenVerbose("Version tag \"\(latestTag)\" matches regex \"\(versionTagRegex)\".")
         }
 
         let tagComponents = latestTag.split(separator: ".")
@@ -321,11 +317,15 @@ struct VersionBranch: ParsableCommand {
             throw ExitCode.failure
         }
 
+        printWhenVerbose("Successfully validated tag \"\(latestTag)\".")
+
         return VersionTag(major: major, minor: minor, fix: fix)
     }
 
+    // From https://rderik.com/blog/understanding-the-swift-argument-parser-and-working-with-stdin/
     func promptToProceed(_ prompt: String, defaultValue: Bool = true) -> Bool {
         guard !skipPrompts else {
+            printWhenVerbose("Skipping prompt: \(prompt)")
             return defaultValue
         }
 
@@ -339,7 +339,7 @@ struct VersionBranch: ParsableCommand {
             return promptToProceed(prompt)
         }
 
-        return yesOrNo!.matches(regex: #"(yes|y)"#)
+        return yesOrNo!.matches(regex: #"(?i)(yes|y)(?-i)"#)
     }
 
     static var consoleLog = ""
@@ -379,7 +379,7 @@ struct VersionBranch: ParsableCommand {
         return trimWhitespacesAndNewlines ? output.trimmingCharacters(in: .whitespacesAndNewlines) : output
     }
 
-    func verbosePrint(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+    func printWhenVerbose(_ items: Any..., separator: String = " ", terminator: String = "\n") {
         guard verbose else {
             return
         }
