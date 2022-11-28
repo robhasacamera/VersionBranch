@@ -106,7 +106,14 @@ struct VersionBranch: ParsableCommand {
 
     // Validate file path
     func validate() throws {
-        verbosePrint("Starting command validation.")
+        var validatedSuccessfully = false
+        defer {
+            if verbose, !validatedSuccessfully {
+                printConsoleLog()
+            }
+        }
+
+        verbosePrint("Starting validation.")
         var errors = [String]()
 
         verbosePrint("Checking for git-path.")
@@ -117,7 +124,6 @@ struct VersionBranch: ParsableCommand {
             if FileManager.default.fileExists(atPath: gitPath, isDirectory: &isDirectory) {
                 if isDirectory.boolValue {
                     verbosePrint("Successfully validated git-path.")
-                    try shell("cd \(gitPath)")
                 } else {
                     errors.append("Path is not a directory: \(gitPath)")
                 }
@@ -136,7 +142,7 @@ struct VersionBranch: ParsableCommand {
             } else {
                 errors.append("This is not a git repo. \(Self.scriptName) must be run within a git repo.")
             }
-        }  else {
+        } else {
             verbosePrint("Skipping git repo validation due to git-path error.")
         }
 
@@ -169,14 +175,21 @@ struct VersionBranch: ParsableCommand {
             throw ExitCode.validationFailure
         }
 
+        validatedSuccessfully = true
         verbosePrint("No validation errors found.")
     }
 
     mutating func run() throws {
-        verbosePrint("Starting command run.")
+        defer {
+            if verbose {
+                printConsoleLog()
+            }
+        }
+
+        verbosePrint("Starting command run in \"\(try shell("pwd"))\".")
 
         verbosePrint("Checking the current branch.")
-        let currentBranch = try shell(Git.currentBranch).trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentBranch = try shell(Git.currentBranch)
 
         // TODO: Add a shortcut for trimming whitespace in a utils package
         if currentBranch != Git.main {
@@ -192,7 +205,7 @@ struct VersionBranch: ParsableCommand {
         verbosePrint("Finished checking the current branch.")
 
         verbosePrint("Checking for remote branch")
-        let remoteBranch = try shell(Git.remoteBranch).trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteBranch = try shell(Git.remoteBranch)
 
         // TODO: check if remote exists, if not skip pull
         if !remoteBranch.isEmpty {
@@ -205,9 +218,10 @@ struct VersionBranch: ParsableCommand {
                 let mergeBaseHash = try shell(Git.mergeBaseHash)
 
                 // If local hash is behind the remote, it'll be the merge base
-                if localBranchHash != remoteBranchHash
-                    && localBranchHash == mergeBaseHash
-                && promptToProceed("Local branch is out of date with remote, do a pull?"){
+                if localBranchHash != remoteBranchHash,
+                   localBranchHash == mergeBaseHash,
+                   promptToProceed("Local branch is out of date with remote, do a pull?")
+                {
                     verbosePrint("Pulling remote for updates.")
                     if try shell(Git.pull).contains(Self.fatalRegex) {
                         print("Exiting: Unable to pull from remote \"\(remoteBranch)\".")
@@ -264,14 +278,32 @@ struct VersionBranch: ParsableCommand {
         throw ExitCode.success
     }
 
+    func printConsoleLog() {
+        print("--------- Start Console Log ---------")
+        print(Self.consoleLog)
+        print("---------- End Console Log ----------")
+    }
+
     func getVersionTag() throws -> VersionTag {
+        verbosePrint("Getting latest version tag.")
         let latestTag = try shell(Git.lastestTag)
-        if !latestTag.matches(regex: #"\d+\.\d+\.\d+"#) {
+
+        verbosePrint("Validating potential version tag \"\(latestTag)\".")
+
+        let versionTagRegex = #"\d+\.\d+\.\d+"#
+
+        if !latestTag.matches(regex: versionTagRegex) {
             if promptToProceed("No version tag found in the format \"X.X.X\". A new tag will be created in that format, proceed?") {
-                return VersionTag(major: 0, minor: 0, fix: 0)
+                let defaultTag = VersionTag(major: 0, minor: 0, fix: 0)
+
+                verbosePrint("Proving default version tag \"\(defaultTag)\"")
+                return defaultTag
             } else {
+                print("Exiting: User refused to create tag.")
                 throw ExitCode.success
             }
+        } else {
+            verbosePrint("Version tag \"\(latestTag)\" matches regex \"\(versionTagRegex)\".")
         }
 
         let tagComponents = latestTag.split(separator: ".")
@@ -310,12 +342,24 @@ struct VersionBranch: ParsableCommand {
         return yesOrNo!.matches(regex: #"(yes|y)"#)
     }
 
+    static var consoleLog = ""
+
+    // Need to keep in mind this isn't one bash session. It will not remember things between sessions.
     // From https://betterprogramming.pub/command-line-tool-with-argument-parser-in-swift-b0e1c27aebd
     @discardableResult
-    func shell(_ command: String) throws -> String {
+    func shell(_ command: String, useGitPath: Bool = true, trimWhitespacesAndNewlines: Bool = true) throws -> String {
         let task = Process()
         task.launchPath = "/bin/bash"
-        task.arguments = ["-c", command]
+
+        let commandInDir: String
+
+        if let gitPath, useGitPath {
+            commandInDir = "pushd > /dev/null \(gitPath) && \(command) && popd > /dev/null"
+        } else {
+            commandInDir = command
+        }
+
+        task.arguments = ["-c", commandInDir]
 
         let pipe = Pipe()
         task.standardOutput = pipe
@@ -326,11 +370,13 @@ struct VersionBranch: ParsableCommand {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
 
         guard let output = String(data: data, encoding: .utf8) else {
-            print("Could not get output for command: \(command)")
+            print("Could not get output for command: \(commandInDir)")
             throw ExitCode.failure
         }
 
-        return output
+        Self.consoleLog.append("Console Log \(Self.scriptName)$ \(commandInDir)\n\(output)")
+
+        return trimWhitespacesAndNewlines ? output.trimmingCharacters(in: .whitespacesAndNewlines) : output
     }
 
     func verbosePrint(_ items: Any..., separator: String = " ", terminator: String = "\n") {
